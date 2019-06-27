@@ -1,7 +1,9 @@
+#!/usr/bin/env python2
 import json
 import urlparse
 import argparse
 import sys
+from enum import Enum
 
 
 def create_letters(e, b):
@@ -416,12 +418,71 @@ def create_symbols(e, b):
     return symbols
 
 
+class PerWordFillPattern(object):
+    def __init__(self, emojis, **kwargs):
+        self._emojis = emojis
+        self._index = 0
+
+    def next_word(self, letters):
+        from itertools import repeat
+
+        emoji = self._emojis[self._index]
+        self._index = (self._index + 1) % len(self._emojis)
+        return repeat([emoji])
+
+
+class PerLetterFillPattern(object):
+    def __init__(self, emojis, **kwargs):
+        self._emojis = emojis
+        self._index = 0
+
+    def next_word(self, letters):
+        from itertools import cycle, islice
+
+        baseidx = self._index
+        self._index = (self._index + len(letters)) % len(self._emojis)
+        return islice(cycle(self._emojis), baseidx, None)
+
+
+class RandomFillPattern(object):
+    def __init__(self, emojis, **kwargs):
+        self._emojis = emojis
+
+    def next_word(self, letters):
+        while True:
+            yield random.choice(self._emojis)
+
+
+def choose_fill_pattern(text, **kwargs):
+    """
+    Create a fill pattern based on the number of words we are filling.
+    """
+    if len(text) == 1:
+        return PerLetterFillPattern(text=text, **kwargs)
+    else:
+        return PerWordFillPattern(text=text, **kwargs)
+
+
+FILL_PATTERNS = {
+        'auto': choose_fill_pattern,
+        'per-word': PerWordFillPattern,
+        'per-letter': PerLetterFillPattern,
+        'random': RandomFillPattern,
+}
+
+
 def construct_message(options):
     parser = argparse.ArgumentParser(description='Print block letters made of emojis')
     parser.add_argument('emojis', 
     help="""The emojis to use to make characters. This must be a single string.
           The code will split on \':\'""")
     parser.add_argument('text', nargs='+', help='The text to print')
+    parser.add_argument('--pattern', '-p',
+                        action='store',
+                        choices=FILL_PATTERNS.keys(),
+                        default='auto',
+                        help='The pattern to use to fill the word'
+                        )
     parser.add_argument('-l', action='store_true', help='Use multiple emojis per letter. If theres only one word to print this will be default')
     parser.add_argument('-b', action='store', dest='blank', default=':blank:', help='Specify the emoji to use for blank space')
 
@@ -429,10 +490,6 @@ def construct_message(options):
     
     text = args.text
 
-    per_letter = args.l
-    if len(text) == 1:
-        per_letter = True
-    
     emojis = args.emojis.split(':')
     emojis = [e for e in emojis if e]
 
@@ -451,7 +508,9 @@ def construct_message(options):
     # If only skin-tone was provided, the emoji array could be empty now, which will
     # cause an error below
     if len(emojis) == 0:
-        return 'Cannot provide only a skin-tone emoji'
+        return 'Cannot provide only a skin-tone emoji', False
+
+    filler = FILL_PATTERNS.get(args.pattern)(text=text, emojis=emojis)
 
     blank = args.blank
     if blank[0] != ':':
@@ -495,7 +554,7 @@ def construct_message(options):
         message += '\n\n'
         if not per_letter:
             e = e + 1
-    return message
+    return message, True
 
 def lambda_handler(event, context):
     print(event)
@@ -528,7 +587,7 @@ def lambda_handler(event, context):
             }
         }
     
-    message = construct_message(opts)
+    message, ok = construct_message(opts)
 
     return {
         'statusCode': str(200),
@@ -540,8 +599,11 @@ def lambda_handler(event, context):
     }
 
 def main():
-    message = construct_message(sys.argv[1:])
-    print(message)
+    message, ok = construct_message(sys.argv[1:])
+    if ok:
+        print(message)
+    else:
+        sys.exit(message)
 
 if __name__ == "__main__":
     main()
